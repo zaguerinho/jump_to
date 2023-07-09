@@ -38,6 +38,18 @@ then
     fi
 fi
 
+# Function to validate key file
+function ssh_key_validation() {
+    local key_path="$1"
+    if ssh-keygen -l -f "${key_path}" >/dev/null 2>&1; then
+        return 0
+    else
+        echo "Invalid Key File."
+        return 1
+    fi
+}
+
+
 # Function to validate IP address
 function validate_ip() {
     if [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -136,7 +148,11 @@ function remove_entry() {
 
 # Function to list entries
 function list_entries() {
-    crudini --get ${CONFIG_PATH}
+    if [[ $(crudini --get ${CONFIG_PATH} 2>/dev/null) ]]; then
+        crudini --get ${CONFIG_PATH}
+    else
+        echo "No entries found."
+    fi
 }
 
 # Main script
@@ -150,18 +166,29 @@ elif [[ $1 == "list" ]]; then
     list_entries
 else
     # SSH Connection
+   # SSH Connection
     identifier="$1"
     jumphost_IP=$(crudini --get ${CONFIG_PATH} ${identifier} jumphost_IP)
     ec2_IP=$(crudini --get ${CONFIG_PATH} ${identifier} ec2_IP)
     key_path=$(crudini --get ${CONFIG_PATH} ${identifier} key_path)
 
-    # Load the private key to the ssh agent
-    eval "$(ssh-agent -s)"
-    ssh-add ${key_path}
+    if [[ -n ${key_path} ]]; then
+        # Start the ssh agent
+        eval "$(ssh-agent -s)"
 
-    # SSH into the EC2 instance through the jumphost
-    ssh -A -t ec2-user@${jumphost_IP} ssh -A -t ec2-user@${ec2_IP}
+        # Load the private key to the ssh agent
+        if ssh_key_validation "${key_path}"; then
+            ssh-add ${key_path}
+            ssh -v -A -t "ec2-user@${jumphost_IP}" ssh -v -A -t "ec2-user@${ec2_IP}"
+        else
+            echo "Invalid Key File."
+        fi
 
-    # End the ssh agent
-    eval "$(ssh-agent -k)"
+        # End the ssh agent
+        eval "$(ssh-agent -k)"
+    else
+        echo "Could not find key_path for identifier ${identifier}"
+    fi
+
 fi
+
