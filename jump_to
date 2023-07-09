@@ -1,0 +1,167 @@
+#!/bin/bash
+
+CONFIG_PATH=~/.jump/config.ini
+
+# Usage message
+if [[ $# -eq 0 ]] ; then
+    echo "Usage:"
+    echo "jump_to add         - Add a new ssh connection"
+    echo "jump_to edit        - Edit an existing ssh connection"
+    echo "jump_to remove [id] - Remove a ssh connection by id"
+    echo "jump_to list        - List all ssh connections"
+    echo "jump_to [id]        - Connect to ssh by id"
+    exit 0
+fi
+
+# Check if config.ini exists, if not create it
+if [[ ! -f $CONFIG_PATH ]]; then
+    mkdir -p ~/.jump
+    touch $CONFIG_PATH
+fi
+
+# Check if crudini exists, if not ask to install it
+if ! command -v crudini &> /dev/null
+then
+    echo "crudini could not be found"
+    read -p "Do you want to install crudini? (y/n): " install_crudini
+    if [[ $install_crudini == "y" ]]; then
+        pip install crudini
+        if [[ $? -eq 0 ]]; then
+            echo "crudini installed successfully"
+        else
+            echo "crudini installation failed"
+            exit 1
+        fi
+    else
+        echo "crudini is required for the script to work. Exiting..."
+        exit 1
+    fi
+fi
+
+# Function to validate IP address
+function validate_ip() {
+    if [[ $1 =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to validate key path
+function validate_key_path() {
+    if [[ -f $1 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to validate identifier
+function validate_identifier() {
+    if [[ $1 =~ ^[a-zA-Z0-9]+$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to add or edit entry
+function manage_entry() {
+    local action="$1"
+    local identifier=""
+
+    # Ask for identifier until a valid one is provided
+    while true; do
+        read -p "Enter the identifier: " identifier
+        if validate_identifier $identifier; then
+            break
+        else
+            echo "Invalid Identifier. It should only contain letters and numbers."
+        fi
+    done
+
+    # Ask for jumphost IP until a valid one is provided
+    local jumphost_IP=""
+    while true; do
+        read -p "Enter the Jumphost IP: " jumphost_IP
+        if validate_ip $jumphost_IP; then
+            break
+        else
+            echo "Invalid IP."
+        fi
+    done
+
+    # Ask for EC2 IP until a valid one is provided
+    local ec2_IP=""
+    while true; do
+        read -p "Enter the EC2 IP: " ec2_IP
+        if validate_ip $ec2_IP; then
+            break
+        else
+            echo "Invalid IP."
+        fi
+    done
+
+    # Ask for Key Path until a valid one is provided
+    local key_path=""
+    while true; do
+        read -p "Enter the Key Path: " key_path
+        if validate_key_path $key_path; then
+            break
+        else
+            echo "Invalid Key Path."
+        fi
+    done
+
+    # Add or edit the entry
+    if [[ $action == "add" || $action == "edit" ]]; then
+        crudini --set ${CONFIG_PATH} ${identifier} jumphost_IP ${jumphost_IP}
+        crudini --set ${CONFIG_PATH} ${identifier} ec2_IP ${ec2_IP}
+        crudini --set ${CONFIG_PATH} ${identifier} key_path ${key_path}
+        echo "Entry $action completed successfully for identifier: $identifier"
+    fi
+}
+
+# Function to remove entry
+function remove_entry() {
+    local identifier="$1"
+
+    if [[ $(crudini --get ${CONFIG_PATH} ${identifier}) ]]; then
+        crudini --del ${CONFIG_PATH} ${identifier}
+        echo "Entry Removed"
+    else
+        echo "Identifier Not Found"
+    fi
+}
+
+# Function to list entries
+function list_entries() {
+    crudini --get ${CONFIG_PATH}
+}
+
+# Main script
+if [[ $1 == "add" ]]; then
+    manage_entry "add"
+elif [[ $1 == "edit" ]]; then
+    manage_entry "edit"
+elif [[ $1 == "remove" ]]; then
+    remove_entry "$2"
+elif [[ $1 == "list" ]]; then
+    list_entries
+else
+    # SSH Connection
+    identifier="$1"
+    jumphost_IP=$(crudini --get ${CONFIG_PATH} ${identifier} jumphost_IP)
+    ec2_IP=$(crudini --get ${CONFIG_PATH} ${identifier} ec2_IP)
+    key_path=$(crudini --get ${CONFIG_PATH} ${identifier} key_path)
+
+    # Load the private key to the ssh agent
+    eval "$(ssh-agent -s)"
+    ssh-add ${key_path}
+
+    # SSH into the EC2 instance through the jumphost
+    ssh -A -t ec2-user@${jumphost_IP} ssh -A -t ec2-user@${ec2_IP}
+
+    # End the ssh agent
+    eval "$(ssh-agent -k)"
+fi
